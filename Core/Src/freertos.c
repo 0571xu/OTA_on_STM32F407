@@ -30,6 +30,7 @@
 #include "string.h"
 #include "usart.h"
 #include "iwdg.h"
+#include "wifi.h"
 #include "ota_receive.h"
 #include "stream_buffer.h"
 #include "queue.h"
@@ -87,6 +88,29 @@ static void hb_set(uint32_t bit)
 	taskENTER_CRITICAL();
 	g_hb_mask |= bit;
 	taskEXIT_CRITICAL();
+}
+
+/*
+ * 元数据临界区：ota_receive.c 里改用静态缓冲后，同一时刻只允许一处
+ * 做"读-改-写"。这里用原子 test-and-set，避免"先判断再置位"的竞态。
+ */
+static int meta_lock(void)
+{
+	int ok = 0;
+
+	taskENTER_CRITICAL();
+	if (g_meta_busy == 0U)
+	{
+		g_meta_busy = 1U;
+		ok = 1;
+	}
+	taskEXIT_CRITICAL();
+	return ok;
+}
+
+static void meta_unlock(void)
+{
+	g_meta_busy = 0U;
 }
 
 /* USER CODE END Variables */
@@ -171,7 +195,7 @@ void MX_FREERTOS_Init(void) {
   wifi_getHandle = osThreadCreate(osThread(wifi_get), NULL);
 
   /* definition and creation of ota_flash */
-  osThreadDef(ota_flash, ota_flashTask, osPriorityHigh, 0, 256);
+  osThreadDef(ota_flash, ota_flashTask, osPriorityHigh, 0, 768);
   ota_flashHandle = osThreadCreate(osThread(ota_flash), NULL);
 
   /* definition and creation of request_upgrade */
@@ -640,7 +664,6 @@ void request_upgradeTask(void const * argument)
 
 	for (;;)
 	{
-		ota_config_t meta;
 		uint8_t current_slot;
 		uint8_t target_slot;
 		int ret;
@@ -661,43 +684,16 @@ void request_upgradeTask(void const * argument)
 		/* 当前运行槽一定是目标槽的另一半 */
 		current_slot = (uint8_t)(target_slot ^ 1U);
 
-		if (ota_meta_load(&meta) != 0)
-		{
-			/* 元数据缺失（工厂状态）：把当前实际运行的槽登记为 VALID */
-			memset(&meta, 0, sizeof(meta));
-			meta.magic = OTA_META_MAGIC;
-			meta.active_slot = current_slot;
-			meta.prev_slot = target_slot;
-			meta.slot_state[current_slot] = SLOT_STATE_VALID;
-			meta.version[current_slot] = CURRENT_VERSION;
-			meta.slot_size[current_slot] = 0;
-			meta.slot_crc[current_slot] = 0;
-		}
-
 		/*
 		 * 切换标志：active_slot 指向新槽，Bootloader 下次启动直接跳过去。
-		 * trial_pending 置 1，由新固件的心跳任务在健康运行 5s 后清零；
-		 * 若一直不确认，Bootloader 会在 trial_count 达到上限后回滚到 prev_slot。
+		 * 元数据整块读写都在 ota_receive.c 内部用静态缓冲完成，这里不再占栈。
 		 */
-		meta.magic = OTA_META_MAGIC;
-		meta.prev_slot = current_slot;
-		meta.active_slot = target_slot;
-		meta.trial_pending = 1;
-		meta.trial_count = 0;
-		meta.slot_state[target_slot] = SLOT_STATE_VALID;
-		meta.slot_state[current_slot] = SLOT_STATE_VALID;
-		meta.version[target_slot] = CURRENT_VERSION;  /* 新固件启动后会修正为自己的版本 */
-		meta.slot_size[target_slot] = g_firmware_size;
-		meta.slot_crc[target_slot] = g_firmware_crc;
-		meta.dl_state = 0;
-		meta.dl_slot = target_slot;
-		meta.dl_total = 0;
-		memset(meta.rx_bitmap, 0, sizeof(meta.rx_bitmap));
+		while (!meta_lock())
+			osDelay(10);
+		ret = ota_meta_request_switch(current_slot, target_slot,
+		                              g_firmware_size, g_firmware_crc);
+		meta_unlock();
 
-		/* 写非活动副本 + 读回校验，成功后再复位 */
-		g_meta_busy = 1;
-		ret = ota_meta_save(&meta);
-		g_meta_busy = 0;
 		if (ret == 0)
 		{
 			static const char ok[] = "upgrade ok, reboot to new slot...\r\n";
@@ -748,6 +744,8 @@ void feeddog(void const * argument)
 	uint32_t ticks = 0;
 	uint32_t healthy_ms = 0;
 	int confirmed = 0;
+	uint8_t mem_reported = 0;
+	uint16_t up_sec = 0;
 
 	(void)argument;
 
@@ -766,6 +764,33 @@ void feeddog(void const * argument)
 
 		if (++ticks >= HB_WINDOW_TICKS)
 		{
+			/*
+			 * 上电 10s 打印一次内存余量：
+			 *   heap  = 当前剩余 / 历史最低剩余（字节）
+			 *   stack = 各任务栈自启动以来的最小剩余量（word），越小越接近溢出
+			 */
+			if (!mem_reported && ++up_sec >= 10U)
+			{
+				char mb[160];
+
+				mem_reported = 1;
+				(void)snprintf(mb, sizeof(mb), "[mem] heap free=%u min=%u\r\n",
+				               (unsigned)xPortGetFreeHeapSize(),
+				               (unsigned)xPortGetMinimumEverFreeHeapSize());
+				boot_log(mb);
+
+				(void)snprintf(mb, sizeof(mb),
+				               "[mem] stack left(w): led=%u oled=%u wifi=%u flash=%u upg=%u lcd=%u dog=%u\r\n",
+				               (unsigned)uxTaskGetStackHighWaterMark(ledHandle),
+				               (unsigned)uxTaskGetStackHighWaterMark(oledmenuHandle),
+				               (unsigned)uxTaskGetStackHighWaterMark(wifi_getHandle),
+				               (unsigned)uxTaskGetStackHighWaterMark(ota_flashHandle),
+				               (unsigned)uxTaskGetStackHighWaterMark(request_upgradeHandle),
+				               (unsigned)uxTaskGetStackHighWaterMark(lcdHandle),
+				               (unsigned)uxTaskGetStackHighWaterMark(feeddogTaskHandle));
+				boot_log(mb);
+			}
+
 			if (seen == HB_ALL)
 			{
 				HAL_IWDG_Refresh(&hiwdg);
@@ -774,12 +799,18 @@ void feeddog(void const * argument)
 				{
 					healthy_ms += 1000U;
 					/* 下载/写元数据期间不确认，避免和 ota_flashTask 抢 Flash */
-					if (healthy_ms >= OTA_CONFIRM_WINDOW_MS && !g_ota_busy)
+					if (healthy_ms >= OTA_CONFIRM_WINDOW_MS && !g_ota_busy && meta_lock())
 					{
 						int ret;
-						g_meta_busy = 1;
+						static const char c1[] = "[hb] confirm begin\r\n";
+						static const char c2[] = "[hb] confirm done\r\n";
+						/* 诊断打印一律走轮询，避免依赖串口互斥锁与 DMA */
+						boot_log(c1);
+
 						ret = ota_app_confirm_healthy(APP_IMAGE_BASE);
-						g_meta_busy = 0;
+						meta_unlock();
+
+						boot_log(c2);
 
 						if (ret >= 0)
 						{
@@ -795,6 +826,12 @@ void feeddog(void const * argument)
 			}
 			else
 			{
+				/* 有任务缺席：打印缺了哪一位（bit0=WIFI bit1=FLASH bit2=UPGRADE bit3=APP） */
+				char hb_line[32];
+				(void)snprintf(hb_line, sizeof(hb_line), "[hb] miss=%02lX\r\n",
+				               (unsigned long)(HB_ALL & ~seen));
+				boot_log(hb_line);
+
 				/* 有任务缺席：清零健康计时，且本窗口不喂狗 */
 				healthy_ms = 0;
 			}
@@ -810,5 +847,36 @@ void feeddog(void const * argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+
+/*
+ * FreeRTOS 断言钩子。
+ * 常见触发原因：在优先级不合法（数值 < configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY）
+ * 的中断里调用了 FromISR API、在调度器挂起时调用了阻塞 API、队列/信号量句柄为空。
+ * 这里直接轮询 USART1 打印行号，不依赖互斥锁与中断。
+ */
+void vAssertCalled(uint32_t line)
+{
+	char buf[40];
+	(void)snprintf(buf, sizeof(buf), "\r\n[ASSERT] line=%lu\r\n", (unsigned long)line);
+	boot_log(buf);
+	for (;;)
+	{
+	}
+}
+
+/*
+ * 栈溢出钩子。ota_config_t 的读写已经改成静态缓冲，调用方不再在栈上复制
+ * 302 字节结构体；这里保留钩子作为兜底，出现即说明某个任务栈给小了。
+ */
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+	char buf[64];
+	(void)xTask;
+	(void)snprintf(buf, sizeof(buf), "\r\n[STACK] overflow task=%s\r\n", pcTaskName);
+	boot_log(buf);
+	for (;;)
+	{
+	}
+}
 
 /* USER CODE END Application */

@@ -32,6 +32,7 @@ bootloader_test\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_ex
 bootloader_test\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_dma.h
 bootloader_test\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_dma_ex.h
 bootloader_test\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_cortex.h
+bootloader_test\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_can.h
 bootloader_test\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_flash.h
 bootloader_test\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_flash_ex.h
 bootloader_test\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_flash_ramfunc.h
@@ -52,6 +53,7 @@ bootloader_test\freertos.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
 bootloader_test\freertos.o: ../Core/Inc/usart.h
 bootloader_test\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h
 bootloader_test\freertos.o: ../Core/Inc/iwdg.h
+bootloader_test\freertos.o: ../Core/Inc/wifi.h
 bootloader_test\freertos.o: ../Core/Inc/ota_receive.h
 bootloader_test\freertos.o: ../Hardware/QDTFT_demo.h
 bootloader_test\freertos.o: ../Hardware/Lcd_Driver.h

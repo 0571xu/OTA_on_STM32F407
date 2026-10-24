@@ -24,6 +24,7 @@ bootloader_test_slotb\usart.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal
 bootloader_test_slotb\usart.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_dma.h
 bootloader_test_slotb\usart.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_dma_ex.h
 bootloader_test_slotb\usart.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_cortex.h
+bootloader_test_slotb\usart.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_can.h
 bootloader_test_slotb\usart.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_flash.h
 bootloader_test_slotb\usart.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_flash_ex.h
 bootloader_test_slotb\usart.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_flash_ramfunc.h
@@ -49,3 +50,4 @@ bootloader_test_slotb\usart.o: ../Middlewares/Third_Party/FreeRTOS/Source/includ
 bootloader_test_slotb\usart.o: ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS/cmsis_os.h
 bootloader_test_slotb\usart.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/timers.h
 bootloader_test_slotb\usart.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/event_groups.h
+bootloader_test_slotb\usart.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h

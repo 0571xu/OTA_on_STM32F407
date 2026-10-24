@@ -842,21 +842,22 @@ ARM Macro Assembler    Page 13
               00000200 
               00000000 
 Command Line: --debug --xref --diag_suppress=9931 --cpu=Cortex-M4.fp.sp --apcs=
-interwork --depend=bootloader_test\startup_stm32f407xx.d -obootloader_test\star
+interwork --depend=bootloader_test_slotb\startup_stm32f407xx.d -obootloader_tes
 
 
 
 ARM Macro Assembler    Page 14 
 
 
-tup_stm32f407xx.o -I../Core/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc -I../Driv
-ers/STM32F4xx_HAL_Driver/Inc/Legacy -I../Middlewares/Third_Party/FreeRTOS/Sourc
-e/include -I../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS -I../Middlewa
-res/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I../Drivers/CMSIS/Devic
-e/ST/STM32F4xx/Include -I../Drivers/CMSIS/Include -I.\RTE\_bootloader_test -IC:
-\Keil_v5\ARM\PACK\ARM\CMSIS\5.7.0\CMSIS\Core\Include --predefine="__UVISION_VER
-SION SETA 532" --predefine="_RTE_ SETA 1" --predefine="STM32F407xx SETA 1" --pr
-edefine="_RTE_ SETA 1" --list=startup_stm32f407xx.lst startup_stm32f407xx.s
+t_slotb\startup_stm32f407xx.o -I../Core/Inc -I../Drivers/STM32F4xx_HAL_Driver/I
+nc -I../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I../Middlewares/Third_Party/Fr
+eeRTOS/Source/include -I../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS -
+I../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I../Drivers
+/CMSIS/Device/ST/STM32F4xx/Include -I../Drivers/CMSIS/Include -I.\RTE\_bootload
+er_test_slotB -IC:\Keil_v5\ARM\PACK\ARM\CMSIS\5.7.0\CMSIS\Core\Include --predef
+ine="__UVISION_VERSION SETA 532" --predefine="_RTE_ SETA 1" --predefine="STM32F
+407xx SETA 1" --predefine="_RTE_ SETA 1" --list=startup_stm32f407xx.lst startup
+_stm32f407xx.s
 
 
 

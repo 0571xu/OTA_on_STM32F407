@@ -185,11 +185,12 @@ typedef struct {
 } flash_region_t;
 
 /*
- * 只允许擦写这四个区域。Bootloader、以及任何越界地址都会被直接拒绝，
+ * 只允许擦写这五个区域。Bootloader、以及任何越界地址都会被直接拒绝，
  * 避免 firmware_size 异常或地址算错时误擦 Bootloader / 元数据。
- * B 槽的物理末端是 0x08100000（S11 末尾），但镜像可用上限仍由 SLOT_CAPACITY 限制。
+ * B 槽的物理末端是 0x080A0000（S8 末尾），但镜像可用上限仍由 SLOT_CAPACITY 限制。
  */
 static const flash_region_t g_flash_regions[] = {
+    { STAGING_BASE, STAGING_END },
     { SLOT_A_BASE,  SLOT_A_END },
     { SLOT_B_BASE,  SLOT_B_ERASE_END },
     { META0_BASE,   META0_BASE + META_SECTOR_SIZE },
@@ -286,14 +287,27 @@ StatusTypeDef flash_write(uint32_t dest_addr, uint8_t *src, uint32_t size)
 
 /* ==================== 元数据双副本 ==================== */
 
+/*
+ * 元数据工作缓冲（放 .bss，不放栈）。
+ *
+ * ota_config_t 有 302 字节，最早每个调用者都在栈上各留一份，
+ * 最深路径 confirm(302) → save(302) → crc(302) 接近 900 字节，
+ * 直接把 512 字节的喂狗任务栈踩穿（表现为 HardFault UNDEFINSTR）。
+ * 现在统一复用这两块静态缓冲，调用方零栈开销。
+ *
+ * 并发前提：同一时刻只允许一处进入"读-改-写"流程。
+ * 任务上下文由 freertos.c 的 g_meta_busy 串行化；
+ * APP 启动阶段调度器尚未启动，天然独占。
+ */
+static ota_config_t s_meta;
+static ota_config_t s_crc_tmp;
+
 static uint32_t ota_meta_crc(const ota_config_t *cfg)
 {
-    ota_config_t tmp;
+    memcpy(&s_crc_tmp, cfg, sizeof(s_crc_tmp));
+    memset(&s_crc_tmp.meta_crc, 0xFF, sizeof(s_crc_tmp.meta_crc));  /* 计算时该字段按 0xFFFFFFFF */
 
-    memcpy(&tmp, cfg, sizeof(tmp));
-    memset(&tmp.meta_crc, 0xFF, sizeof(tmp.meta_crc));  /* 计算时该字段按 0xFFFFFFFF */
-
-    return ota_crc32_bytes(&tmp, sizeof(tmp));
+    return ota_crc32_bytes(&s_crc_tmp, sizeof(s_crc_tmp));
 }
 
 static int ota_meta_is_valid(const ota_config_t *cfg)
@@ -316,6 +330,23 @@ static int ota_meta_is_valid(const ota_config_t *cfg)
         return 0;
     }
     return (ota_meta_crc(cfg) == cfg->meta_crc) ? 1 : 0;
+}
+
+/* 只取最新副本的 seq：避免为了一个字段在栈上复制整份 302 字节结构体 */
+static uint32_t ota_meta_latest_seq(void)
+{
+    const ota_config_t *copy0 = (const ota_config_t *)META0_BASE;
+    const ota_config_t *copy1 = (const ota_config_t *)META1_BASE;
+    int valid0 = ota_meta_is_valid(copy0);
+    int valid1 = ota_meta_is_valid(copy1);
+
+    if (!valid0 && !valid1) {
+        return 0U;
+    }
+    if (valid1 && (!valid0 || copy1->seq > copy0->seq)) {
+        return copy1->seq;
+    }
+    return copy0->seq;
 }
 
 /*
@@ -365,11 +396,13 @@ static uint32_t ota_meta_write_addr(void)
  */
 int ota_meta_save(ota_config_t *cfg)
 {
-    ota_config_t current;
     uint32_t addr;
 
     cfg->magic = OTA_META_MAGIC;
-    cfg->seq   = (ota_meta_load(&current) == 0) ? (current.seq + 1U) : 1U;
+    cfg->seq   = ota_meta_latest_seq() + 1U;
+    if (cfg->seq == 0U) {
+        cfg->seq = 1U;
+    }
     addr       = ota_meta_write_addr();
 
     cfg->meta_crc = ota_meta_crc(cfg);
@@ -431,7 +464,7 @@ static int ota_slot_index_from_base(uint32_t image_base)
  */
 void ota_app_boot_init(uint32_t image_base)
 {
-    ota_config_t meta;
+    ota_config_t *meta = &s_meta;
     int slot = ota_slot_index_from_base(image_base);
     int dirty = 0;
 
@@ -439,45 +472,45 @@ void ota_app_boot_init(uint32_t image_base)
         return;   /* 镜像链接地址不在 A/B 槽内，不写元数据 */
     }
 
-    if (ota_meta_load(&meta) != 0) {
-        memset(&meta, 0, sizeof(meta));
-        meta.magic = OTA_META_MAGIC;
-        meta.active_slot = (uint8_t)slot;
-        meta.prev_slot = (uint8_t)(slot ^ 1);
-        meta.slot_state[slot] = SLOT_STATE_VALID;
-        meta.version[slot] = CURRENT_VERSION;
-        meta.slot_size[slot] = 0;   /* 工厂镜像没有 CRC 信息，Bootloader 跳过整包校验 */
-        meta.slot_crc[slot] = 0;
-        meta.trial_pending = 0;
-        ota_meta_save(&meta);
+    if (ota_meta_load(meta) != 0) {
+        memset(meta, 0, sizeof(*meta));
+        meta->magic = OTA_META_MAGIC;
+        meta->active_slot = (uint8_t)slot;
+        meta->prev_slot = (uint8_t)(slot ^ 1);
+        meta->slot_state[slot] = SLOT_STATE_VALID;
+        meta->version[slot] = CURRENT_VERSION;
+        meta->slot_size[slot] = 0;   /* 工厂镜像没有 CRC 信息，Bootloader 跳过整包校验 */
+        meta->slot_crc[slot] = 0;
+        meta->trial_pending = 0;
+        ota_meta_save(meta);
         return;
     }
 
-    if (meta.active_slot != (uint8_t)slot) {
+    if (meta->active_slot != (uint8_t)slot) {
         /*
          * active_slot 指向的槽没能启动，Bootloader 回退到了当前槽。
          * 新的 Bootloader 会自己写回元数据，这里只做兜底：
          * 修正 active_slot，并把启动失败的槽标记为 INVALID，避免反复尝试。
          */
-        uint8_t failed = meta.active_slot;
-        meta.prev_slot = failed;
-        meta.active_slot = (uint8_t)slot;
-        meta.slot_state[failed] = SLOT_STATE_INVALID;
-        meta.trial_pending = 0;
-        meta.trial_count = 0;
+        uint8_t failed = meta->active_slot;
+        meta->prev_slot = failed;
+        meta->active_slot = (uint8_t)slot;
+        meta->slot_state[failed] = SLOT_STATE_INVALID;
+        meta->trial_pending = 0;
+        meta->trial_count = 0;
         dirty = 1;
     }
-    if (meta.slot_state[slot] != SLOT_STATE_VALID) {
-        meta.slot_state[slot] = SLOT_STATE_VALID;
+    if (meta->slot_state[slot] != SLOT_STATE_VALID) {
+        meta->slot_state[slot] = SLOT_STATE_VALID;
         dirty = 1;
     }
-    if (meta.version[slot] != CURRENT_VERSION) {
-        meta.version[slot] = CURRENT_VERSION;
+    if (meta->version[slot] != CURRENT_VERSION) {
+        meta->version[slot] = CURRENT_VERSION;
         dirty = 1;
     }
 
     if (dirty) {
-        ota_meta_save(&meta);
+        ota_meta_save(meta);
     }
 }
 
@@ -487,23 +520,71 @@ void ota_app_boot_init(uint32_t image_base)
  */
 int ota_app_confirm_healthy(uint32_t image_base)
 {
-    ota_config_t meta;
+    ota_config_t *meta = &s_meta;
     int slot = ota_slot_index_from_base(image_base);
 
     if (slot < 0) {
         return -1;
     }
-    if (ota_meta_load(&meta) != 0) {
+    if (ota_meta_load(meta) != 0) {
         return -1;
     }
-    if (meta.active_slot != (uint8_t)slot || meta.trial_pending == 0U) {
+    if (meta->active_slot != (uint8_t)slot || meta->trial_pending == 0U) {
         return 0;   /* 没有待确认的试运行 */
     }
 
-    meta.trial_pending = 0;
-    meta.trial_count = 0;
-    if (ota_meta_save(&meta) != 0) {
+    meta->trial_pending = 0;
+    meta->trial_count = 0;
+    if (ota_meta_save(meta) != 0) {
         return -1;
     }
     return 1;
+}
+
+/*
+ * 下载完成后请求切换到目标槽：填好元数据写回，下次复位由 Bootloader 跳过去。
+ *
+ * current_slot 是当前正在运行的槽，target_slot 是刚下载好的槽。
+ * trial_pending 置 1，由新固件的心跳任务在健康运行 OTA_CONFIRM_WINDOW_MS 后清零；
+ * 若一直不确认，Bootloader 会在 trial_count 达到上限后回滚到 prev_slot。
+ *
+ * 调用者必须保证与其它元数据操作互斥（任务上下文用 g_meta_busy 串行化）。
+ */
+int ota_meta_request_switch(uint8_t current_slot, uint8_t target_slot,
+                            uint32_t image_size, uint32_t image_crc)
+{
+    ota_config_t *meta = &s_meta;
+
+    if (current_slot > 1U || target_slot > 1U || current_slot == target_slot) {
+        return -1;
+    }
+
+    if (ota_meta_load(meta) != 0) {
+        /* 元数据缺失（工厂状态）：把当前实际运行的槽登记为 VALID */
+        memset(meta, 0, sizeof(*meta));
+        meta->magic = OTA_META_MAGIC;
+        meta->active_slot = current_slot;
+        meta->prev_slot = target_slot;
+        meta->slot_state[current_slot] = SLOT_STATE_VALID;
+        meta->version[current_slot] = CURRENT_VERSION;
+        meta->slot_size[current_slot] = 0;
+        meta->slot_crc[current_slot] = 0;
+    }
+
+    meta->magic = OTA_META_MAGIC;
+    meta->prev_slot = current_slot;
+    meta->active_slot = target_slot;
+    meta->trial_pending = 1;
+    meta->trial_count = 0;
+    meta->slot_state[target_slot] = SLOT_STATE_VALID;
+    meta->slot_state[current_slot] = SLOT_STATE_VALID;
+    meta->version[target_slot] = CURRENT_VERSION;  /* 新固件启动后会修正为自己的版本 */
+    meta->slot_size[target_slot] = image_size;
+    meta->slot_crc[target_slot] = image_crc;
+    meta->dl_state = 0;
+    meta->dl_slot = target_slot;
+    meta->dl_total = 0;
+    memset(meta->rx_bitmap, 0, sizeof(meta->rx_bitmap));
+
+    return (ota_meta_save(meta) == 0) ? 0 : -1;
 }

@@ -64,7 +64,14 @@
 #define configTICK_RATE_HZ                       ((TickType_t)1000)
 #define configMAX_PRIORITIES                     ( 7 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-#define configTOTAL_HEAP_SIZE                    ((size_t)15360)
+#define configTOTAL_HEAP_SIZE                    ((size_t)24576)
+
+/*
+ * 栈溢出检查（方法 2：填充图案 + 栈顶指针双检）。
+ * 本工程里 ota_config_t 有 302 字节，凡是直接调用 ota_meta_save / ota_app_confirm_healthy
+ * 的任务，栈深度需求都在 1KB 以上，光靠"看起来够用"很容易踩栈。
+ */
+#define configCHECK_FOR_STACK_OVERFLOW           2
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_16_BIT_TICKS                   0
 #define configUSE_MUTEXES                        1
@@ -85,6 +92,7 @@ to exclude the API function. */
 #define INCLUDE_vTaskPrioritySet             1
 #define INCLUDE_uxTaskPriorityGet            1
 #define INCLUDE_vTaskDelete                  1
+#define INCLUDE_uxTaskGetStackHighWaterMark  1
 #define INCLUDE_vTaskCleanUpResources        0
 #define INCLUDE_vTaskSuspend                 1
 #define INCLUDE_vTaskDelayUntil              0
@@ -119,7 +127,10 @@ See http://www.FreeRTOS.org/RTOS-Cortex-M3-M4.html. */
 /* Normal assert() semantics without relying on the provision of an assert.h
 header file. */
 /* USER CODE BEGIN 1 */
-#define configASSERT( x ) if ((x) == 0) {taskDISABLE_INTERRUPTS(); for( ;; );}
+#define configASSERT( x ) if ((x) == 0) { vAssertCalled(__LINE__); }
+
+/* 断言钩子：打印出错行号后停机，方便现场定位（实现在 freertos.c） */
+void vAssertCalled(uint32_t line);
 /* USER CODE END 1 */
 
 /* Definitions that map the FreeRTOS port interrupt handlers to their CMSIS

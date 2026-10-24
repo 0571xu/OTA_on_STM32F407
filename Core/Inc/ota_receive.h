@@ -11,24 +11,34 @@
 
 /* ==================== Flash 分区 ==================== */
 /*
- * 0x08000000 - 0x08007FFF  Bootloader   S0 ~ S1  (32KB)
- * 0x08008000 - 0x0800BFFF  元数据副本 0  S2       (16KB)
- * 0x0800C000 - 0x0800FFFF  元数据副本 1  S3       (16KB)
- * 0x08010000 - 0x0807FFFF  APP A        S4 ~ S7  (448KB)
- * 0x08080000 - 0x080FFFFF  APP B        S8 ~ S11 (物理 512KB，可用 448KB)
+ * 0x08000000 - 0x08007FFF  Bootloader        S0 ~ S1  (32KB)
+ * 0x08008000 - 0x0800BFFF  元数据副本 0       S2       (16KB)
+ * 0x0800C000 - 0x0800FFFF  元数据副本 1       S3       (16KB)
+ * 0x08010000 - 0x0801FFFF  F103 镜像暂存区    S4       (64KB)
+ * 0x08020000 - 0x0805FFFF  APP A             S5 ~ S6  (256KB)
+ * 0x08060000 - 0x0809FFFF  APP B             S7 ~ S8  (256KB)
+ * 0x080A0000 - 0x080FFFFF  预留              S9 ~ S11 (384KB)
  *
- * 两个槽的“可用容量”必须一致（都按 448KB 限制），否则某个镜像能放进 B 却放不进 A。
+ * 两个槽的“可用容量”必须一致（都按 SLOT_CAPACITY 限制），否则某个镜像能放进 B 却放不进 A。
  * 两份元数据必须位于不同扇区：擦除粒度是扇区，同扇区会一擦全没。
+ *
+ * 槽的起点必须落在 128KB 扇区的边界上（S5、S7 都是），否则擦 B 槽首个扇区会连带擦掉 A 槽尾部。
+ * S4 只有 64KB，正好等于 F103 的整片 Flash；它同时满足“单一擦除单位”，
+ * 暂存区写坏时只需擦这一个扇区，不会波及 A/B 槽。
  */
 #define BOOTLOADER_BASE     0x08000000U
 #define BOOTLOADER_SIZE     (32U * 1024U)
 
-#define SLOT_A_BASE         0x08010000U
-#define SLOT_B_BASE         0x08080000U
-#define SLOT_CAPACITY       (448U * 1024U)
-#define SLOT_A_END          (SLOT_A_BASE + SLOT_CAPACITY)   /* 0x08080000 */
-#define SLOT_B_END          (SLOT_B_BASE + SLOT_CAPACITY)   /* 0x080F0000，可用上限 */
-#define SLOT_B_ERASE_END    0x08100000U                     /* B 物理末端，S11 末尾 */
+#define STAGING_BASE        0x08010000U                     /* S4：F103 镜像暂存 */
+#define STAGING_SIZE        (64U * 1024U)
+#define STAGING_END         (STAGING_BASE + STAGING_SIZE)   /* 0x08020000 */
+
+#define SLOT_A_BASE         0x08020000U
+#define SLOT_B_BASE         0x08060000U
+#define SLOT_CAPACITY       (256U * 1024U)
+#define SLOT_A_END          (SLOT_A_BASE + SLOT_CAPACITY)   /* 0x08060000 */
+#define SLOT_B_END          (SLOT_B_BASE + SLOT_CAPACITY)   /* 0x080A0000，可用上限 */
+#define SLOT_B_ERASE_END    0x080A0000U                     /* B 物理末端，S8 末尾 */
 
 #define META0_BASE          0x08008000U
 #define META1_BASE          0x0800C000U
@@ -39,8 +49,8 @@
 
 /*
  * 当前 APP 构建版本链接到哪个槽。
- *   默认（不定义 APP_SLOT_B）：A 版镜像，链接地址 0x08010000
- *   定义 APP_SLOT_B        ：B 版镜像，链接地址 0x08080000
+ *   默认（不定义 APP_SLOT_B）：A 版镜像，链接地址 0x08020000
+ *   定义 APP_SLOT_B        ：B 版镜像，链接地址 0x08060000
  *
  * 运行在哪个槽由链接地址唯一确定，不能靠元数据去猜：
  * 一旦元数据与实际运行槽不一致，就可能把正在运行的固件擦掉。
@@ -55,7 +65,11 @@
 
 /* ==================== OTA 参数区结构 ==================== */
 #define OTA_META_MAGIC      0x4F544132U      /* "OTA2"，与 Bootloader 保持一致 */
+#ifdef APP_SLOT_B
 #define CURRENT_VERSION     0x00010005U      /* V1.5 */
+#else
+#define CURRENT_VERSION     0x00010006U      /* V1.4 */
+#endif
 
 #define OTA_MAX_TOTAL_CHUNKS        2048U
 #define OTA_BITMAP_BYTES            ((OTA_MAX_TOTAL_CHUNKS + 7U) / 8U)  /* 每 8 包 1 字节 */
@@ -165,6 +179,12 @@ void           ota_app_boot_init(uint32_t image_base);
 /* 心跳健康运行满 OTA_CONFIRM_WINDOW_MS 后调用：
  * 1 = 确认成功（清掉 trial_pending），0 = 无需确认，-1 = 写入失败 */
 int            ota_app_confirm_healthy(uint32_t image_base);
+
+/* 下载完成后请求切换到目标槽（写元数据 + 置 trial_pending），0 = 成功。
+ * 内部使用静态缓冲，调用者不需要在栈上准备 ota_config_t。
+ * 调用者负责与其它元数据操作互斥。 */
+int            ota_meta_request_switch(uint8_t current_slot, uint8_t target_slot,
+                                       uint32_t image_size, uint32_t image_crc);
 
 int            ota_image_vectors_valid(uint32_t slot_base);
 

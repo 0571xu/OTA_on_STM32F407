@@ -37,6 +37,8 @@ extern "C" {
 
 extern UART_HandleTypeDef huart1;
 
+extern UART_HandleTypeDef huart2;
+
 /* USER CODE BEGIN Private defines */
 
 //#define EN_USART1_RX  1   // 1 = 启用串口接收中断；0 = 不启用
@@ -60,12 +62,21 @@ extern UART_HandleTypeDef huart1;
 /* USER CODE END Private defines */
 
 void MX_USART1_UART_Init(void);
+void MX_USART2_UART_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 extern uint8_t           CercleBuffer[CercleBufferSize];   /* DMA 环形接收缓冲区 */
 extern volatile uint16_t read_pos;                         /* 已取出数据的读位置 */
 
 void uart_send(const uint8_t *data, uint16_t len);         /* 带互斥保护的串口发送 */
+
+/* USART1 = 调试口（向 PC 输出日志）；USART2 = ESP8266（AT + 透传） */
+void uart2_send(const uint8_t *data, uint16_t len);
+void uart2_send_bytes(const char *s, uint16_t len);
+void uart2_send_at(const char *cmd);
+
+/* 启动打点：调度器启动前可用，直接阻塞发送到 USART1 */
+void boot_log(const char *s);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

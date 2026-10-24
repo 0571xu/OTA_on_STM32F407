@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
+#include "can.h"
 #include "dma.h"
 #include "iwdg.h"
 #include "spi.h"
@@ -71,7 +72,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	/* 向量表必须指向本镜像实际链接的槽：A 版 0x08010000，B 版 0x08080000 */
+	/* 向量表必须指向本镜像实际链接的槽：A 版 0x08020000，B 版 0x08060000 */
 	SCB->VTOR = APP_IMAGE_BASE;
   /* USER CODE END 1 */
 
@@ -97,9 +98,12 @@ int main(void)
   MX_USART1_UART_Init();
   MX_SPI1_Init();
   MX_IWDG_Init();
-  /* 调试暂停时冻结 IWDG，否则在 Keil 里单步几秒就会被看门狗复位 */
-  __HAL_DBGMCU_FREEZE_IWDG();
+  MX_CAN1_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+
+	/* 编译时间戳：确认板子上跑的到底是不是刚烧进去的这一版 */
+	boot_log("[boot] build " __DATE__ " " __TIME__ "\r\n");
 
 	GPIO_InitTypeDef GPIO_InitStructure;
 	GPIO_InitStructure.Pin = GPIO_PIN_1;
@@ -114,14 +118,23 @@ int main(void)
 	 *   3. 注意：不清 trial_pending，试运行确认由心跳任务在健康运行 5s 后完成。
 	 */
 	ota_app_boot_init(APP_IMAGE_BASE);
+	boot_log("[boot] 6 meta ok\r\n");
+
+	/*
+	 * CAN 初始化放到任务里执行：
+	 * CAN 外设异常（无收发器、波特率配错、邮箱卡死）不应该把整个系统拖死在启动阶段，
+	 * 否则表现就是"Bootloader 反复重启、APP 一句日志都看不到"。
+	 */
+	if (xTaskCreate(can_start_task, "canInit", 256, NULL, 3, NULL) != pdPASS)
+	{
+		boot_log("[boot] can task create fail\r\n");
+	}
+	boot_log("[boot] 7 start scheduler\r\n");
 
   /* USER CODE END 2 */
 
   /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();
-
-  /* 交给调度器前先喂一次狗，给任务启动留出完整的看门狗窗口 */
-  HAL_IWDG_Refresh(&hiwdg);
 
   /* Start scheduler */
   osKernelStart();
