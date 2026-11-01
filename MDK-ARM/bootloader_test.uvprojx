@@ -424,6 +424,16 @@
               <FilePath>../Core/Src/freertos.c</FilePath>
             </File>
             <File>
+              <FileName>isotp.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/isotp.c</FilePath>
+            </File>
+            <File>
+              <FileName>uds.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/uds.c</FilePath>
+            </File>
+            <File>
               <FileName>can.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/can.c</FilePath>
@@ -1412,6 +1422,16 @@
               <FileName>freertos.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/freertos.c</FilePath>
+            </File>
+            <File>
+              <FileName>isotp.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/isotp.c</FilePath>
+            </File>
+            <File>
+              <FileName>uds.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/uds.c</FilePath>
             </File>
             <File>
               <FileName>can.c</FileName>

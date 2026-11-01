@@ -48,5 +48,6 @@ bootloader_test\can.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/list.h
 bootloader_test\can.o: ../Core/Inc/usart.h
 bootloader_test\can.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/semphr.h
 bootloader_test\can.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h
+bootloader_test\can.o: ../Core/Inc/isotp.h
 bootloader_test\can.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
 bootloader_test\can.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h

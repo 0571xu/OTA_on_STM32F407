@@ -48,9 +48,9 @@ APP 的两个 Target：
 | CAN1 500kbps 初始化 | 已实现 | PSC=6 / BS1=11TQ / BS2=2TQ / SJW=1TQ |
 | 回环自检 | 已实现 | 上电发 3 帧对比，串口打印 `[can] loopback 3/3` |
 | 收发任务骨架 | 已实现 | `can_start_task` / `can_if_send` / `can_if_recv` |
-| ISO-TP（ISO 15765-2） | **未实现** | 多帧拆包/流控还没写 |
-| UDS 子集 | **未实现** | `0x10/0x3E/0x34/0x36/0x37/0x31` 还没写 |
-| F103 节点 OTA | **未实现** | 仅预留了 S4 暂存区地址 |
+| ISO-TP（ISO 15765-2） | 发送端已实现 | `isotp.c`：SF / FF / CF 拆包、序号 1~15 循环、流控 BS/STmin、N_Bs 5 秒超时；上电回环自测 300 字节 |
+| UDS 子集 | 主链路已实现 | `uds.c`：0x10 会话 / 0x3E 保活 / 0x34 请求下载 / 0x36 传数据 / 0x37 结束；含 0x78 pending 与 NRC 处理；尚未接入任务调用 |
+| F103 节点 OTA | **部分实现** | S4 暂存区擦写/读回/整包校验已完成（含上电自测）；TCP 下载与 CAN 下发未做 |
 
 ### 2.3 WiFi（只到"函数已移植"）
 
@@ -164,8 +164,8 @@ F407/
 │   └── Core/Src/main.c      分区常量、元数据、启动决策、跳转
 ├── bootloader_test/         APP 工程（Keil，A/B 两个 Target）
 │   ├── README.md            本文件
-│   ├── Core/Inc/            ota_receive.h（分区/元数据/帧格式）、can.h、wifi.h
-│   ├── Core/Src/            ota_receive.c、can.c、freertos.c（任务与心跳）
+│   ├── Core/Inc/            ota_receive.h（分区/元数据/帧格式）、can.h、isotp.h、wifi.h
+│   ├── Core/Src/            ota_receive.c、can.c、isotp.c、freertos.c（任务与心跳）
 │   └── MDK-ARM/wifi.c       ESP8266 AT 配置（不在 IncludePath，故 .c 放这里）
 ├── ota_send.py              上位机发送脚本
 ├── OTA问题与踩坑总结.md      问题清单与复盘
@@ -284,11 +284,12 @@ CRC32 用 STM32 硬件 CRC（CRC-32/MPEG-2，按 32 位字、小端组字，尾�
 1. **APP 栈/任务**：`lcd_task` 目前空转（演示代码已注释）；`oledmenuTask` 只是占位打印。
 2. **`xWifisendTaskHandle` 为 NULL**：`request_upgradeTask` 里对它的通知是空操作，等 TCP 下载任务建起来才有意义。
 3. **断点续传未启用**：`dl_state` / `rx_bitmap` 等字段留着但没参与流程。
-4. **CAN 只到自测**：没有 ISO-TP / UDS，也就无法对 F103 下发镜像。
-5. **S4 暂存区只有地址**：擦写与校验接口尚未实现。
+4. **CAN 只到传输层**：ISO-TP 只有发送端，UDS（`0x10/0x34/0x36/0x37`）还没写，所以还无法对 F103 真正下发镜像；F103 侧接收代码也还没有。
+5. **S4 暂存区只到"能存"**：`ota_staging_erase/write/read/verify` 已实现，上电自测默认开启（`OTA_STAGING_SELFTEST_ON_BOOT = 1`），它会擦掉 S4 里已暂存的镜像，正式使用前必须改成 0。下载与 CAN 下发链路尚未实现。
 
 ---
 
 ## 9. 相关文档
 
 - [OTA问题与踩坑总结.md](../OTA问题与踩坑总结.md)：问题清单、根因复盘、修改元数据的检查清单、448KB → 256KB 分区变更记录。
+- [CAN-OTA帧结构与联调说明.md](./CAN-OTA帧结构与联调说明.md)：CAN / ISO-TP / UDS 三层帧结构逐字节说明、完整时序、编译烧录步骤、故障对照表。

@@ -55,6 +55,8 @@ bootloader_test_slotb\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/inc
 bootloader_test_slotb\freertos.o: ../Core/Inc/iwdg.h
 bootloader_test_slotb\freertos.o: ../Core/Inc/wifi.h
 bootloader_test_slotb\freertos.o: ../Core/Inc/ota_receive.h
+bootloader_test_slotb\freertos.o: ../Core/Inc/isotp.h
+bootloader_test_slotb\freertos.o: ../Core/Inc/uds.h
 bootloader_test_slotb\freertos.o: ..\Hardware\QDTFT_demo.h
 bootloader_test_slotb\freertos.o: ..\Hardware\Lcd_Driver.h
 bootloader_test_slotb\freertos.o: ../Core/Inc/gpio.h

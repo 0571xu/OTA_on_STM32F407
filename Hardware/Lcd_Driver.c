@@ -1,4 +1,4 @@
-﻿#include "main.h"
+#include "main.h"
 #include "Lcd_Driver.h"
 #include "LCD_Config.h"
 //本测试程序使用的是模拟SPI接口驱动
@@ -7,7 +7,7 @@
 接口定义在Lcd_Driver.h内定义，请根据接线修改并修改相应IO初始化LCD_GPIO_Init()
 #define LCD_CTRL   	  	GPIOB		//定义TFT数据端口
 #define LCD_LED        	GPIO_Pin_9  //PB9--->>TFT --BL
-#define LCD_RS         	GPIO_Pin_10	//PB11--->>TFT --RS/DC
+#define LCD_RS         	GPIO_Pin_10	//PB10--->>TFT --RS/DC
 #define LCD_CS        	GPIO_Pin_11  //PB11--->>TFT --CS/CE
 #define LCD_RST     		GPIO_Pin_12	//PB10--->>TFT --RST
 #define LCD_SCL        	GPIO_Pin_13	//PB13--->>TFT --SCL/SCK

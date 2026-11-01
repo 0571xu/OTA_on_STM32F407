@@ -104,7 +104,9 @@ void HardFault_Handler(void)
   /* USER CODE BEGIN HardFault_IRQn 0 */
 
   /* USER CODE END HardFault_IRQn 0 */
-  /* USER CODE BEGIN W1_HardFault_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
   /*
    * 硬件异常现场：CFSR 说明异常类型，HFSR 说明是否由可配置异常升级而来。
    * 只打印一次，避免把串口刷屏（之后由 IWDG 复位）。
@@ -116,10 +118,7 @@ void HardFault_Handler(void)
     boot_log(buf);
     boot_log("[FAULT] halted, waiting IWDG reset\r\n");
   }
-  /* USER CODE END W1_HardFault_IRQn 0 */
-
-  while (1)
-  {
+    /* USER CODE END W1_HardFault_IRQn 0 */
   }
 }
 
@@ -416,7 +415,9 @@ void DMA2_Stream7_IRQHandler(void)
    中断中不能释放互斥量，所以这里只给信号量，由 uart_send() 所在任务释放锁。 */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART1)
+  /* 信号量未创建时这里必须跳过：osSemaphoreRelease(NULL) 在中断里会触发
+     xQueueGiveFromISR 的 configASSERT，直接停机等看门狗复位。 */
+  if ((huart->Instance == USART1) && (uartTxDoneSem != NULL))
     osSemaphoreRelease(uartTxDoneSem);
 }
 

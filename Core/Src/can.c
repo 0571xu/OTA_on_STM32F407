@@ -25,6 +25,7 @@
 #include "queue.h"
 #include "task.h"
 #include "usart.h"
+#include "isotp.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -60,12 +61,6 @@ void MX_CAN1_Init(void)
 
   /* USER CODE END CAN1_Init 1 */
   hcan1.Instance = CAN1;
-  /*
-   * APB1 = 42MHz，500kbps 的位时序：
-   *   42MHz / 6 = 7MHz，7MHz / (1 + 11 + 2) = 500kHz
-   *   采样点 = (1 + 11) / 14 = 85.7%
-   * 注意：这里改了以后，CubeMX 的 .ioc 里也要同步改成 6，否则下次生成会被覆盖。
-   */
   hcan1.Init.Prescaler = 6;
   hcan1.Init.Mode = CAN_MODE_NORMAL;
   hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
@@ -200,6 +195,21 @@ void can_start_task(void *arg)
   (void)can_if_selftest_loopback();
 #endif
 
+#if ISOTP_SELFTEST_ON_BOOT
+  {
+    /* ISO-TP 自测：拆包 / 序号循环 / 长度字段 / 流控解析，全部在回环里完成 */
+    char l[56];
+    int  n = isotp_selftest();
+
+    if (n > 0) {
+      (void)snprintf(l, sizeof(l), "[iso] selftest ok frames=%d\r\n", n);
+    } else {
+      (void)snprintf(l, sizeof(l), "[iso] selftest FAIL rc=%d\r\n", n);
+    }
+    can_if_print(l);
+  }
+#endif
+
   vTaskDelete(NULL);
 }
 
@@ -259,6 +269,11 @@ int can_if_init(void)
   return can_if_start(CAN_MODE_NORMAL, 1U);
 }
 
+int can_if_reinit(uint32_t mode, uint8_t enable_irq)
+{
+  return can_if_start(mode, enable_irq);
+}
+
 int can_if_send(uint32_t std_id, const uint8_t *data, uint8_t dlc, uint32_t timeout_ms)
 {
   CAN_TxHeaderTypeDef hdr;
@@ -281,8 +296,27 @@ int can_if_send(uint32_t std_id, const uint8_t *data, uint8_t dlc, uint32_t time
     can_if_delay_ms(1U);
   }
 
-  return (HAL_CAN_AddTxMessage(&hcan1, &hdr, (uint8_t *)data, &mailbox) == HAL_OK)
-         ? 0 : -3;
+  if (HAL_CAN_AddTxMessage(&hcan1, &hdr, (uint8_t *)data, &mailbox) != HAL_OK) return -3;
+
+  /*
+   * AutoRetransmission is enabled in CAN1_Init, so a frame that nobody
+   * acknowledges is retried by the hardware indefinitely and keeps its
+   * mailbox occupied. The bus then stays jammed and every later send fails
+   * with "no free mailbox", which looks exactly like "the other node is
+   * dead". Abort the request once the caller's timeout expires.
+   */
+  start = HAL_GetTick();
+  while (HAL_CAN_IsTxMessagePending(&hcan1, mailbox) != 0U)
+  {
+    if ((HAL_GetTick() - start) >= timeout_ms)
+    {
+      (void)HAL_CAN_AbortTxRequest(&hcan1, mailbox);
+      return -4;
+    }
+    can_if_delay_ms(1U);
+  }
+
+  return 0;
 }
 
 int can_if_recv(can_frame_t *out, uint32_t timeout_ms)

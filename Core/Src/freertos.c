@@ -32,12 +32,84 @@
 #include "iwdg.h"
 #include "wifi.h"
 #include "ota_receive.h"
+#include "isotp.h"
+#include "uds.h"
 #include "stream_buffer.h"
 #include "queue.h"
 #include "QDTFT_demo.h"
 #include "Lcd_Driver.h"
 #include "GUI.h"
 /* USER CODE END Includes */
+
+/* ==================== 临时联调任务 ==================== */
+/*
+ * 【临时】上电后对 node 1 跑一遍 UDS 下发链路，验证 F407 侧能不能正确发出
+ * ISO-TP 的首帧/连续帧，以及"没有人回响应"时超时逻辑是否正常。
+ *
+ * F103 侧还没写好，所以预期输出：
+ *   0x10 请求   -> 1 秒后返回 rc=-2（UDS_E_TIMEOUT）
+ *   300 字节    -> 首帧发出后等流控 2 秒，返回 rc=-3（ISOTP_E_FC_TIMEOUT），frames=1
+ *
+ * frames=1 就说明首帧确实上了总线；如果 frames=0，问题在 can_if_send，不在协议层。
+ * 联调完成后把 UDS_BOOT_TEST 改成 0，这段代码就不再参与编译。
+ */
+#ifndef UDS_BOOT_TEST
+#define UDS_BOOT_TEST 1
+#endif
+
+#if UDS_BOOT_TEST
+static uint8_t s_test_pdu[300];
+
+/* 任务上下文里必须走 uart_send（互斥 + DMA），不能用 boot_log：
+   boot_log 是阻塞式 HAL_UART_Transmit，和别的任务的 DMA 发送撞上时会直接
+   返回 HAL_BUSY，字符串被静默丢弃——日志看着像"卡住了"，其实只是没打出来。 */
+static void uds_log(const char *s)
+{
+	uart_send((const uint8_t *)s, (uint16_t)strlen(s));
+}
+
+static void uds_test_task(void const *argument)
+{
+	char     s[112];
+	uint32_t i;
+	uint32_t t0;
+	int      rc;
+
+	(void)argument;
+	osDelay(3000);                     /* 等 CAN 初始化、心跳确认稳定 */
+
+	for (i = 0U; i < sizeof(s_test_pdu); i++) {
+		s_test_pdu[i] = (uint8_t)(i + 1U);
+	}
+
+	/* ① 会话控制：2 字节单帧请求，看能不能等到响应（当前必然超时） */
+	t0 = HAL_GetTick();
+	rc = uds_session(1U, UDS_SESSION_PROGRAM);
+	(void)snprintf(s, sizeof(s), "[uds] 0x10 rc=%d nrc=%02X to=%u req=%u t=%ums\r\n",
+	               rc,
+	               (unsigned)uds_get_stat()->last_nrc,
+	               (unsigned)uds_get_stat()->timeouts,
+	               (unsigned)uds_get_stat()->requests,
+	               (unsigned)(HAL_GetTick() - t0));
+	uds_log(s);
+
+	/* ② 300 字节 PDU：验证首帧发出、等流控、超时返回 */
+	uds_log("[uds] step2 send 300B\r\n");
+	isotp_reset_stat();
+	t0 = HAL_GetTick();
+	rc = isotp_send(UDS_REQ_ID(1U), UDS_RESP_ID(1U), s_test_pdu,
+	                (uint32_t)sizeof(s_test_pdu), 2000U);
+	(void)snprintf(s, sizeof(s), "[uds] isotp300 rc=%d frames=%u fcTO=%u t=%ums\r\n",
+	               rc,
+	               (unsigned)isotp_get_stat()->frames_sent,
+	               (unsigned)isotp_get_stat()->fc_timeouts,
+	               (unsigned)(HAL_GetTick() - t0));
+	uds_log(s);
+
+	uds_log("[uds] test done\r\n");
+	vTaskDelete(NULL);                 /* 一次性任务，跑完自己退场 */
+}
+#endif
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
@@ -121,6 +193,8 @@ osThreadId ota_flashHandle;
 osThreadId request_upgradeHandle;
 osThreadId lcdHandle;
 osThreadId feeddogTaskHandle;
+osThreadId can_sendHandle;
+osThreadId can_getHandle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -134,6 +208,8 @@ void ota_flashTask(void const * argument);
 void request_upgradeTask(void const * argument);
 void lcd_task(void const * argument);
 void feeddog(void const * argument);
+void cansend_Task(void const * argument);
+void canget_Task(void const * argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -210,6 +286,20 @@ void MX_FREERTOS_Init(void) {
   osThreadDef(feeddogTask, feeddog, osPriorityHigh, 0, 512);
   feeddogTaskHandle = osThreadCreate(osThread(feeddogTask), NULL);
 
+  /* definition and creation of can_send */
+  osThreadDef(can_send, cansend_Task, osPriorityIdle, 0, 128);
+  can_sendHandle = osThreadCreate(osThread(can_send), NULL);
+
+  /* definition and creation of can_get */
+  osThreadDef(can_get, canget_Task, osPriorityIdle, 0, 128);
+  can_getHandle = osThreadCreate(osThread(can_get), NULL);
+
+#if UDS_BOOT_TEST
+  /* 【临时】UDS/ISO-TP 联调任务，跑一次就自己退出 */
+  osThreadDef(uds_test, uds_test_task, osPriorityBelowNormal, 0, 512);
+  (void)osThreadCreate(osThread(uds_test), NULL);
+#endif
+
   /* USER CODE BEGIN RTOS_THREADS */
 	/* ota_flashTask 通过这个句柄通知 request_upgradeTask，必须在任务启动前绑定 */
 	xrequest_upgrade_taskHandle = request_upgradeHandle;
@@ -252,11 +342,14 @@ void oledmenuTask(void const * argument)
 {
   /* USER CODE BEGIN oledmenuTask */
 	/* Infinite loop */
+    Lcd_Init();
+    LCD_LED_SET;//通过IO控制背光亮
 	for (;;)
 	{
-		static const char msg[] = "here is oledmenuTask!\r\n";
-		uart_send((const uint8_t *)msg, sizeof(msg) - 1);
-		osDelay(10000);
+//		static const char msg[] = "here is oledmenuTask!\r\n";
+//		uart_send((const uint8_t *)msg, sizeof(msg) - 1);
+        QDTFT_Test_Demo();
+		osDelay(10);
 	}
   /* USER CODE END oledmenuTask */
 }
@@ -843,6 +936,42 @@ void feeddog(void const * argument)
 		osDelay(HB_CHECK_MS);
 	}
   /* USER CODE END feeddog */
+}
+
+/* USER CODE BEGIN Header_cansend_Task */
+/**
+* @brief Function implementing the can_send thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_cansend_Task */
+void cansend_Task(void const * argument)
+{
+  /* USER CODE BEGIN cansend_Task */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END cansend_Task */
+}
+
+/* USER CODE BEGIN Header_canget_Task */
+/**
+* @brief Function implementing the can_get thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_canget_Task */
+void canget_Task(void const * argument)
+{
+  /* USER CODE BEGIN canget_Task */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END canget_Task */
 }
 
 /* Private application code --------------------------------------------------*/

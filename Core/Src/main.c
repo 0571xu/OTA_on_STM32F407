@@ -29,6 +29,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "ota_receive.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -119,6 +120,21 @@ int main(void)
 	 */
 	ota_app_boot_init(APP_IMAGE_BASE);
 	boot_log("[boot] 6 meta ok\r\n");
+
+	/*
+	 * F103 镜像暂存区自测：擦 S4 + 三处写图案 + 读回比对，耗时约 1~2 秒。
+	 * 它会擦掉 S4 里已暂存的镜像，正式使用前把 OTA_STAGING_SELFTEST_ON_BOOT 改成 0。
+	 */
+#if OTA_STAGING_SELFTEST_ON_BOOT
+	{
+		char stg_line[48];
+		int  stg_rc = ota_staging_selftest();
+
+		(void)snprintf(stg_line, sizeof(stg_line), "[stg] selftest %s rc=%d\r\n",
+		               (stg_rc == 0) ? "ok" : "FAIL", stg_rc);
+		boot_log(stg_line);
+	}
+#endif
 
 	/*
 	 * CAN 初始化放到任务里执行：

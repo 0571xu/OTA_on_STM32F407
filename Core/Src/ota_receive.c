@@ -285,6 +285,125 @@ StatusTypeDef flash_write(uint32_t dest_addr, uint8_t *src, uint32_t size)
     return Status_OK;
 }
 
+/* ==================== F103 镜像暂存区（S4） ==================== */
+
+/*
+ * 从 Flash 直接读回并累加到硬件 CRC，尾部不足 4 字节补 0xFF。
+ * 算法与 ota_crc32_bytes 完全一致，区别是不把整包读进 RAM：
+ * F103 镜像最大 64KB，先 memcpy 到缓冲区会把堆直接吃穿。
+ */
+static uint32_t ota_staging_crc32(uint32_t addr, uint32_t len)
+{
+    const volatile uint8_t *p = (const volatile uint8_t *)addr;
+    uint32_t i = 0U;
+    uint32_t word;
+    uint32_t j;
+
+    __HAL_RCC_CRC_CLK_ENABLE();
+    CRC->CR = CRC_CR_RESET;
+
+    for (; i + 4U <= len; i += 4U) {
+        word = (uint32_t)p[i]
+             | ((uint32_t)p[i + 1U] << 8)
+             | ((uint32_t)p[i + 2U] << 16)
+             | ((uint32_t)p[i + 3U] << 24);
+        CRC->DR = word;
+    }
+
+    if (i < len) {
+        word = 0xFFFFFFFFU;
+        for (j = 0U; i + j < len; j++) {
+            word &= ~(0xFFU << (8U * j));
+            word |= ((uint32_t)p[i + j] << (8U * j));
+        }
+        CRC->DR = word;
+    }
+
+    return CRC->DR;
+}
+
+/* 擦除整个 S4（64KB 扇区，约 1~2 秒，期间 CPU 停指） */
+int ota_staging_erase(void)
+{
+    return (flash_erase(STAGING_BASE, STAGING_SIZE) == Status_OK) ? 0 : -1;
+}
+
+int ota_staging_write(uint32_t offset, const uint8_t *src, uint32_t len)
+{
+    if ((src == NULL) || (len == 0U))  return -1;
+    if ((offset % 4U) != 0U)           return -2;   /* 底层按字编程，起始地址必须对齐 */
+    if (offset > STAGING_SIZE)         return -3;
+    if (len > (STAGING_SIZE - offset)) return -3;
+
+    return (flash_write(STAGING_BASE + offset, (uint8_t *)src, len) == Status_OK) ? 0 : -4;
+}
+
+int ota_staging_read(uint32_t offset, uint8_t *dst, uint32_t len)
+{
+    if ((dst == NULL) || (len == 0U))  return -1;
+    if (offset > STAGING_SIZE)         return -2;
+    if (len > (STAGING_SIZE - offset)) return -2;
+
+    memcpy(dst, (const void *)(STAGING_BASE + offset), len);
+    return 0;
+}
+
+int ota_staging_verify(uint32_t size, uint32_t crc)
+{
+    if ((size == 0U) || (size > STAGING_SIZE)) return -1;
+
+    return (ota_staging_crc32(STAGING_BASE, size) == crc) ? 0 : -2;
+}
+
+/*
+ * 自测：擦除 -> 三处写图案 -> 读回比对 -> 验证尾部补齐与 CRC 通路。
+ * 覆盖三个易错点：首地址、中间地址、尾部最后一个字；外加"长度不齐"的写入。
+ * 返回 0 成功，负数为失败步骤，便于定位。
+ */
+int ota_staging_selftest(void)
+{
+    uint8_t  wr[16];
+    uint8_t  rd[16];
+    uint32_t crc;
+    uint32_t i;
+
+    if (ota_staging_erase() != 0) return -1;
+
+    /* ① 起始地址 */
+    for (i = 0U; i < sizeof(wr); i++) wr[i] = (uint8_t)(0x5AU + i);
+    if (ota_staging_write(0U, wr, sizeof(wr)) != 0) return -2;
+    if (ota_staging_read(0U, rd, sizeof(rd)) != 0)  return -2;
+    if (memcmp(wr, rd, sizeof(wr)) != 0)            return -2;
+
+    /* ② 中间地址 */
+    for (i = 0U; i < sizeof(wr); i++) wr[i] = (uint8_t)(0xA5U ^ i);
+    if (ota_staging_write(STAGING_SIZE / 2U, wr, sizeof(wr)) != 0) return -3;
+    if (ota_staging_read(STAGING_SIZE / 2U, rd, sizeof(rd)) != 0)  return -3;
+    if (memcmp(wr, rd, sizeof(wr)) != 0)                           return -3;
+
+    /* ③ 尾部最后一个字：边界与对齐最容易在这里出错 */
+    for (i = 0U; i < sizeof(wr); i++) wr[i] = (uint8_t)(0x3CU + i);
+    if (ota_staging_write(STAGING_SIZE - sizeof(wr), wr, sizeof(wr)) != 0) return -4;
+    if (ota_staging_read(STAGING_SIZE - sizeof(wr), rd, sizeof(rd)) != 0)  return -4;
+    if (memcmp(wr, rd, sizeof(wr)) != 0)                                   return -4;
+
+    /* ④ 长度不齐（写 3 字节）：验证底层补 0xFF */
+    wr[0] = 0x11U;
+    wr[1] = 0x22U;
+    wr[2] = 0x33U;
+    wr[3] = 0xFFU;
+    if (ota_staging_write(16U, wr, 3U) != 0) return -5;
+    if (ota_staging_read(16U, rd, 4U) != 0)  return -5;
+    if (memcmp(wr, rd, 4U) != 0)             return -5;
+
+    /* ⑤ CRC 通路：正确 CRC 必须通过，错误 CRC 必须被拒绝 */
+    crc = ota_staging_crc32(STAGING_BASE, 1040U);
+    if (ota_staging_verify(1040U, crc) != 0)        return -6;
+    if (ota_staging_verify(1040U, crc ^ 1U) == 0)   return -6;
+
+    return 0;
+}
+
 /* ==================== 元数据双副本 ==================== */
 
 /*

@@ -5,6 +5,8 @@
 "bootloader_test_slotb\main.o"
 "bootloader_test_slotb\gpio.o"
 "bootloader_test_slotb\freertos.o"
+"bootloader_test_slotb\isotp.o"
+"bootloader_test_slotb\uds.o"
 "bootloader_test_slotb\can.o"
 "bootloader_test_slotb\dma.o"
 "bootloader_test_slotb\iwdg.o"

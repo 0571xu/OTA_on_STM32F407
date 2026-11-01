@@ -65,12 +65,7 @@
 #define configMAX_PRIORITIES                     ( 7 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
 #define configTOTAL_HEAP_SIZE                    ((size_t)24576)
-
-/*
- * 栈溢出检查（方法 2：填充图案 + 栈顶指针双检）。
- * 本工程里 ota_config_t 有 302 字节，凡是直接调用 ota_meta_save / ota_app_confirm_healthy
- * 的任务，栈深度需求都在 1KB 以上，光靠"看起来够用"很容易踩栈。
- */
+/* 栈溢出检查：2 = 填充图案 + 栈指针越界双重检测，溢出时进 hook 打印任务名 */
 #define configCHECK_FOR_STACK_OVERFLOW           2
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_16_BIT_TICKS                   0
@@ -92,12 +87,12 @@ to exclude the API function. */
 #define INCLUDE_vTaskPrioritySet             1
 #define INCLUDE_uxTaskPriorityGet            1
 #define INCLUDE_vTaskDelete                  1
-#define INCLUDE_uxTaskGetStackHighWaterMark  1
 #define INCLUDE_vTaskCleanUpResources        0
 #define INCLUDE_vTaskSuspend                 1
 #define INCLUDE_vTaskDelayUntil              0
 #define INCLUDE_vTaskDelay                   1
 #define INCLUDE_xTaskGetSchedulerState       1
+#define INCLUDE_uxTaskGetStackHighWaterMark  1
 
 /* Cortex-M specific definitions. */
 #ifdef __NVIC_PRIO_BITS

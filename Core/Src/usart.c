@@ -61,9 +61,9 @@ void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 0 */
 
-  /* USER CODE BEGIN USART1_Init 2 */
+  /* USER CODE BEGIN USART1_Init 1 */
 
-  /* USER CODE END USART1_Init 2 */
+  /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
   huart1.Init.BaudRate = 115200;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
@@ -78,25 +78,14 @@ void MX_USART1_UART_Init(void)
   }
   /* USER CODE BEGIN USART1_Init 2 */
 
-  /* 创建串口发送互斥锁（此时调度器尚未启动，创建是安全的） */
+  /* 发送互斥锁与 DMA 完成信号量（调度器尚未启动，创建是安全的）。
+     缺了这两个对象：uart_send() 无保护；而 TxCplt 中断里 osSemaphoreRelease(NULL)
+     会撞进 xQueueGiveFromISR 的 configASSERT，表现就是第一句 DMA 打印之后死机。 */
   uartTxMutexId = osMutexCreate(osMutex(uartTxMutex));
-
-  /* CMSIS 封装里 count=1 表示创建“二值信号量”，且初始就有 1 个 token，这里取走使其为 0 */
+  /* 传 1 才是二值信号量：osSemaphoreCreate 的 count 必须为 1，
+     传 0 会走 xSemaphoreCreateCounting(0,0) 分支并返回 NULL。
+     uart_send() 每次发送前会 wait(0) 清掉这个初值。 */
   uartTxDoneSem = osSemaphoreCreate(osSemaphore(uartTxDone), 1);
-  osSemaphoreWait(uartTxDoneSem, 0);
-
-  /*
-   * 接收 DMA 与空闲中断必须在这里启动，不能放在 HAL_UART_MspInit() 里：
-   * MspInit 是在 HAL_UART_Init() 内部调用的，那时 RxState 还不是 READY，
-   * HAL_UART_Receive_DMA() 会直接返回 HAL_BUSY，导致串口永远收不到数据。
-   */
-  __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
-  if (HAL_UART_Receive_DMA(&huart1, CercleBuffer, CercleBufferSize) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  boot_log("[boot] 1 usart1 ok\r\n");
 
   /* USER CODE END USART1_Init 2 */
 

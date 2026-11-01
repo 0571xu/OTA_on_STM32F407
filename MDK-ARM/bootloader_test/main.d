@@ -57,3 +57,4 @@ bootloader_test\main.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/strea
 bootloader_test\main.o: ../Core/Inc/gpio.h
 bootloader_test\main.o: ../Core/Inc/ota_receive.h
 bootloader_test\main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
+bootloader_test\main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h

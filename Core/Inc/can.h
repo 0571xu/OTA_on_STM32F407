@@ -85,6 +85,13 @@ int      can_if_recv(can_frame_t *out, uint32_t timeout_ms);
 /* 回环自测，返回 0 表示 3 帧全部正确回环 */
 int      can_if_selftest_loopback(void);
 
+/*
+ * 重新初始化 CAN 到指定模式（CAN_MODE_NORMAL / CAN_MODE_LOOPBACK）。
+ * enable_irq=1 时打开 FIFO0 接收中断。
+ * 供自测临时切模式用，调用方必须成对恢复成 (CAN_MODE_NORMAL, 1)。
+ */
+int      can_if_reinit(uint32_t mode, uint8_t enable_irq);
+
 /* 诊断计数：队列溢出 / 错误中断 / Bus-Off */
 uint32_t can_if_rx_drop_count(void);
 uint32_t can_if_error_count(void);

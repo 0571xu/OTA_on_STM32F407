@@ -11,27 +11,23 @@
 
 /* ==================== Flash 分区 ==================== */
 /*
- * 0x08000000 - 0x08007FFF  Bootloader        S0 ~ S1  (32KB)
- * 0x08008000 - 0x0800BFFF  元数据副本 0       S2       (16KB)
- * 0x0800C000 - 0x0800FFFF  元数据副本 1       S3       (16KB)
- * 0x08010000 - 0x0801FFFF  F103 镜像暂存区    S4       (64KB)
- * 0x08020000 - 0x0805FFFF  APP A             S5 ~ S6  (256KB)
- * 0x08060000 - 0x0809FFFF  APP B             S7 ~ S8  (256KB)
- * 0x080A0000 - 0x080FFFFF  预留              S9 ~ S11 (384KB)
+ * 0x08000000 - 0x08007FFF  Bootloader    S0 ~ S1  (32KB)
+ * 0x08008000 - 0x0800BFFF  元数据副本 0   S2       (16KB)
+ * 0x0800C000 - 0x0800FFFF  元数据副本 1   S3       (16KB)
+ * 0x08010000 - 0x0801FFFF  F103 镜像暂存   S4       (64KB)
+ * 0x08020000 - 0x0805FFFF  APP A         S5 ~ S6  (256KB)
+ * 0x08060000 - 0x0809FFFF  APP B         S7 ~ S8  (256KB)
+ * 0x080A0000 - 0x080FFFFF  预留           S9 ~ S11 (384KB)
  *
- * 两个槽的“可用容量”必须一致（都按 SLOT_CAPACITY 限制），否则某个镜像能放进 B 却放不进 A。
+ * 2026-10-25 由「448KB 双槽」调整为「256KB 双槽 + 64KB 暂存区」：
+ * 多设备 OTA 需要地方存放待下发给 F103 的镜像，原布局没有空闲扇区。
+ *
+ * 两个槽的“可用容量”必须一致（都按 256KB 限制），否则某个镜像能放进 B 却放不进 A。
  * 两份元数据必须位于不同扇区：擦除粒度是扇区，同扇区会一擦全没。
- *
- * 槽的起点必须落在 128KB 扇区的边界上（S5、S7 都是），否则擦 B 槽首个扇区会连带擦掉 A 槽尾部。
- * S4 只有 64KB，正好等于 F103 的整片 Flash；它同时满足“单一擦除单位”，
- * 暂存区写坏时只需擦这一个扇区，不会波及 A/B 槽。
+ * S4 单独成区是因为它是 64KB 扇区，正好等于 F103 片内 Flash 容量。
  */
 #define BOOTLOADER_BASE     0x08000000U
 #define BOOTLOADER_SIZE     (32U * 1024U)
-
-#define STAGING_BASE        0x08010000U                     /* S4：F103 镜像暂存 */
-#define STAGING_SIZE        (64U * 1024U)
-#define STAGING_END         (STAGING_BASE + STAGING_SIZE)   /* 0x08020000 */
 
 #define SLOT_A_BASE         0x08020000U
 #define SLOT_B_BASE         0x08060000U
@@ -39,6 +35,11 @@
 #define SLOT_A_END          (SLOT_A_BASE + SLOT_CAPACITY)   /* 0x08060000 */
 #define SLOT_B_END          (SLOT_B_BASE + SLOT_CAPACITY)   /* 0x080A0000，可用上限 */
 #define SLOT_B_ERASE_END    0x080A0000U                     /* B 物理末端，S8 末尾 */
+
+/* F103 镜像暂存区：从服务器下载完整镜像后先存这里，校验通过再经 CAN 下发 */
+#define STAGING_BASE        0x08010000U
+#define STAGING_SIZE        (64U * 1024U)
+#define STAGING_END         (STAGING_BASE + STAGING_SIZE)   /* 0x08020000 */
 
 #define META0_BASE          0x08008000U
 #define META1_BASE          0x0800C000U
@@ -66,9 +67,9 @@
 /* ==================== OTA 参数区结构 ==================== */
 #define OTA_META_MAGIC      0x4F544132U      /* "OTA2"，与 Bootloader 保持一致 */
 #ifdef APP_SLOT_B
-#define CURRENT_VERSION     0x00010005U      /* V1.5 */
+#define CURRENT_VERSION     0x00010007U      /* V1.7 */
 #else
-#define CURRENT_VERSION     0x00010006U      /* V1.4 */
+#define CURRENT_VERSION     0x00010006U      /* V1.6 */
 #endif
 
 #define OTA_MAX_TOTAL_CHUNKS        2048U
@@ -172,6 +173,11 @@ uint32_t       ota_crc32_bytes(const void *data, uint32_t len);
 int            ota_meta_load(ota_config_t *out);
 int            ota_meta_save(ota_config_t *cfg);
 
+/* 切槽：把 active_slot 指向 target_slot 并置 trial_pending，由调用方负责重启。
+ * 返回 0 成功，-1 参数非法或写入失败。 */
+int            ota_meta_request_switch(uint8_t current_slot, uint8_t target_slot,
+                                       uint32_t image_size, uint32_t image_crc);
+
 /* APP 启动：元数据缺失时建立首份配置，并修正与实际运行槽不一致的状态。
  * 注意：这里不清 trial_pending，试运行确认交给心跳任务。 */
 void           ota_app_boot_init(uint32_t image_base);
@@ -179,12 +185,6 @@ void           ota_app_boot_init(uint32_t image_base);
 /* 心跳健康运行满 OTA_CONFIRM_WINDOW_MS 后调用：
  * 1 = 确认成功（清掉 trial_pending），0 = 无需确认，-1 = 写入失败 */
 int            ota_app_confirm_healthy(uint32_t image_base);
-
-/* 下载完成后请求切换到目标槽（写元数据 + 置 trial_pending），0 = 成功。
- * 内部使用静态缓冲，调用者不需要在栈上准备 ota_config_t。
- * 调用者负责与其它元数据操作互斥。 */
-int            ota_meta_request_switch(uint8_t current_slot, uint8_t target_slot,
-                                       uint32_t image_size, uint32_t image_crc);
 
 int            ota_image_vectors_valid(uint32_t slot_base);
 
@@ -194,5 +194,29 @@ uint32_t       get_sector_base(uint32_t addr);  /* 获取地址所在扇区基�
 uint32_t       get_sector_size(uint32_t sector);/* 扇区大小：16KB / 64KB / 128KB */
 extern StatusTypeDef  flash_erase(uint32_t start_addr, uint32_t size);
 extern StatusTypeDef  flash_write(uint32_t dest_addr, uint8_t *src, uint32_t size);
+
+/* ==================== F103 镜像暂存区（S4） ==================== */
+/*
+ * 用途：F407 从服务器下载完整 F103 镜像 → 存 S4 → 整包 CRC 校验通过 → 再经 CAN 下发。
+ * 先落盘再下发，而不是一边收一边转发：CAN 侧失败可原地重试，不必重新下载。
+ *
+ * 约束：
+ *   1. 写之前必须先 erase（擦除粒度是整个 S4 扇区，1~2 秒）；
+ *   2. offset 必须 4 字节对齐，因为底层按字编程；
+ *   3. 写入长度不必对齐，尾部不足 4 字节由底层补 0xFF。
+ */
+int  ota_staging_erase(void);
+int  ota_staging_write(uint32_t offset, const uint8_t *src, uint32_t len);
+int  ota_staging_read(uint32_t offset, uint8_t *dst, uint32_t len);
+int  ota_staging_verify(uint32_t size, uint32_t crc);   /* 读回整包算 CRC 并比对 */
+
+/*
+ * 暂存区自测：擦 S4、写固定图案、读回比对。
+ * 注意它会擦掉已暂存的镜像，正式使用前必须改成 0。
+ */
+#ifndef OTA_STAGING_SELFTEST_ON_BOOT
+#define OTA_STAGING_SELFTEST_ON_BOOT 1
+#endif
+int  ota_staging_selftest(void);
 
 #endif /* OTA_RECEIVE_H */
